@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { CartItem, Product } from '../types';
+import { CartItem } from '../types';
+import { supabase } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
 interface CartContextType {
@@ -8,8 +9,8 @@ interface CartContextType {
   removeFromCart: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   clearCart: () => void;
-  getCartTotal: (products: Product[]) => number;
-  getCartWeight: (products: Product[]) => number;
+  getCartTotal: () => Promise<number>;
+  getCartWeight: () => Promise<number>;
   getShippingFee: (weight: number) => number;
 }
 
@@ -82,14 +83,34 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
     setItems([]);
   };
 
-  const getCartTotal = (products: Product[]) => {
+  const getCartTotal = async () => {
+    if (items.length === 0) return 0;
+    
+    const productIds = items.map(item => item.productId);
+    const { data: products } = await supabase
+      .from('products')
+      .select('id, price')
+      .in('id', productIds);
+
+    if (!products) return 0;
+
     return items.reduce((total, item) => {
       const product = products.find(p => p.id === item.productId);
       return total + (product ? product.price * item.quantity : 0);
     }, 0);
   };
 
-  const getCartWeight = (products: Product[]) => {
+  const getCartWeight = async () => {
+    if (items.length === 0) return 0;
+    
+    const productIds = items.map(item => item.productId);
+    const { data: products } = await supabase
+      .from('products')
+      .select('id, weight')
+      .in('id', productIds);
+
+    if (!products) return 0;
+
     return items.reduce((weight, item) => {
       const product = products.find(p => p.id === item.productId);
       return weight + (product ? product.weight * item.quantity : 0);

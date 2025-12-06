@@ -3,19 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import { CreditCard, Truck, MapPin, Check } from 'lucide-react';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useLocalStorage } from '../hooks/useLocalStorage';
-import { Product, Order, OrderItem, Address } from '../types';
+import { supabase } from '../lib/supabase';
+import { Address } from '../types';
 import Button from '../components/UI/Button';
-import { v4 as uuidv4 } from 'uuid';
 
 const Checkout: React.FC = () => {
   const { items, getCartTotal, getCartWeight, getShippingFee, clearCart } = useCart();
   const { user, updateUser } = useAuth();
-  const [products] = useLocalStorage<Product[]>('products', []);
-  const [orders, setOrders] = useLocalStorage<Order[]>('orders', []);
   
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [cartProducts, setCartProducts] = useState<any[]>([]);
+  const [subtotal, setSubtotal] = useState(0);
+  const [totalWeight, setTotalWeight] = useState(0);
+  const [shippingFee, setShippingFee] = useState(0);
+  const [total, setTotal] = useState(0);
   
   const [shippingAddress, setShippingAddress] = useState<Address>({
     id: '',
@@ -27,7 +29,7 @@ const Checkout: React.FC = () => {
     isDefault: false,
   });
   
-  const [paymentMethod, setPaymentMethod] = useState<'cash_on_delivery' | 'bank_transfer'>('cash_on_delivery');
+  const [paymentMethod, setPaymentMethod] = useState<'cash_on_delivery' | 'bank_transfer' | 'credit_card' | 'paypal'>('cash_on_delivery');
 
   const navigate = useNavigate();
 
@@ -41,15 +43,37 @@ const Checkout: React.FC = () => {
     return null;
   }
 
-  const cartProducts = items.map(item => ({
-    ...item,
-    product: products.find(p => p.id === item.productId)!
-  })).filter(item => item.product);
+  React.useEffect(() => {
+    const fetchCartData = async () => {
+      if (items.length === 0) return;
+      
+      const productIds = items.map(item => item.productId);
+      const { data: products } = await supabase
+        .from('products')
+        .select('*')
+        .in('id', productIds);
 
-  const subtotal = getCartTotal(products);
-  const totalWeight = getCartWeight(products);
-  const shippingFee = getShippingFee(totalWeight);
-  const total = subtotal + shippingFee;
+      if (products) {
+        const cartProds = items.map(item => ({
+          ...item,
+          product: products.find(p => p.id === item.productId)!
+        })).filter(item => item.product);
+        
+        setCartProducts(cartProds);
+        
+        const sub = await getCartTotal();
+        const weight = await getCartWeight();
+        const shipping = getShippingFee(weight);
+        
+        setSubtotal(sub);
+        setTotalWeight(weight);
+        setShippingFee(shipping);
+        setTotal(sub + shipping);
+      }
+    };
+
+    fetchCartData();
+  }, [items, getCartTotal, getCartWeight, getShippingFee]);
 
   const handleAddressSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,47 +93,74 @@ const Checkout: React.FC = () => {
     setLoading(true);
     
     try {
-      const orderItems: OrderItem[] = cartProducts.map(({ product, quantity }) => ({
-        productId: product.id,
+      // Create order in database
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          user_id: user.id,
+          shipping_address: shippingAddress,
+          payment_method: paymentMethod,
+          payment_status: 'pending',
+          status: 'pending',
+          subtotal,
+          shipping_fee: shippingFee,
+          total,
+        })
+        .select()
+        .single();
+
+      if (orderError) {
+        throw orderError;
+      }
+
+      // Create order items
+      const orderItems = cartProducts.map(({ product, quantity }) => ({
+        order_id: orderData.id,
+        product_id: product.id,
         quantity,
         price: product.price,
-        productName: product.name,
-        productImage: product.images[0],
+        product_name: product.name,
+        product_image: product.images[0],
       }));
 
-      const newOrder: Order = {
-        id: uuidv4(),
-        userId: user.id,
-        items: orderItems,
-        shippingAddress: { ...shippingAddress, id: uuidv4() },
-        paymentMethod,
-        status: 'pending',
-        subtotal,
-        shippingFee,
-        total,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+      const { error: itemsError } = await supabase
+        .from('order_items')
+        .insert(orderItems);
 
-      // Save order
-      setOrders(prev => [...prev, newOrder]);
+      if (itemsError) {
+        throw itemsError;
+      }
 
       // Update product stock
-      const updatedProducts = products.map(product => {
-        const orderItem = orderItems.find(item => item.productId === product.id);
-        if (orderItem) {
-          return { ...product, stock: product.stock - orderItem.quantity };
+      for (const { product, quantity } of cartProducts) {
+        const { error: stockError } = await supabase
+          .from('products')
+          .update({ stock: product.stock - quantity })
+          .eq('id', product.id);
+
+        if (stockError) {
+          console.error('Error updating stock:', stockError);
         }
-        return product;
-      });
-      localStorage.setItem('products', JSON.stringify(updatedProducts));
+      }
 
       // Save address to user profile if new
       if (!user.addresses.some(addr => 
         addr.street === shippingAddress.street && 
         addr.city === shippingAddress.city
       )) {
-        const newAddress = { ...shippingAddress, id: uuidv4() };
+        await supabase
+          .from('addresses')
+          .insert({
+            user_id: user.id,
+            street: shippingAddress.street,
+            city: shippingAddress.city,
+            state: shippingAddress.state,
+            zip_code: shippingAddress.zipCode,
+            country: shippingAddress.country,
+            is_default: shippingAddress.isDefault,
+          });
+
+        const newAddress = { ...shippingAddress, id: crypto.randomUUID() };
         updateUser({
           addresses: [...user.addresses, newAddress]
         });
@@ -119,8 +170,9 @@ const Checkout: React.FC = () => {
       clearCart();
 
       // Redirect to success page
-      navigate(`/order-success/${newOrder.id}`);
+      navigate(`/order-success/${orderData.id}`);
     } catch (error) {
+      console.error('Order placement error:', error);
       alert('Failed to place order. Please try again.');
     } finally {
       setLoading(false);
@@ -310,7 +362,7 @@ const Checkout: React.FC = () => {
                         type="radio"
                         value="cash_on_delivery"
                         checked={paymentMethod === 'cash_on_delivery'}
-                        onChange={(e) => setPaymentMethod(e.target.value as 'cash_on_delivery')}
+                        onChange={(e) => setPaymentMethod(e.target.value as any)}
                         className="text-blue-600 mr-3"
                       />
                       <div>
@@ -324,12 +376,40 @@ const Checkout: React.FC = () => {
                         type="radio"
                         value="bank_transfer"
                         checked={paymentMethod === 'bank_transfer'}
-                        onChange={(e) => setPaymentMethod(e.target.value as 'bank_transfer')}
+                        onChange={(e) => setPaymentMethod(e.target.value as any)}
                         className="text-blue-600 mr-3"
                       />
                       <div>
                         <p className="font-medium">Bank Transfer</p>
                         <p className="text-gray-600 text-sm">Transfer payment to our bank account</p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center p-4 border border-gray-200 rounded-lg cursor-pointer hover:border-blue-500 transition-colors">
+                      <input
+                        type="radio"
+                        value="credit_card"
+                        checked={paymentMethod === 'credit_card'}
+                        onChange={(e) => setPaymentMethod(e.target.value as any)}
+                        className="text-blue-600 mr-3"
+                      />
+                      <div>
+                        <p className="font-medium">Credit Card</p>
+                        <p className="text-gray-600 text-sm">Pay securely with your credit card</p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center p-4 border border-gray-200 rounded-lg cursor-pointer hover:border-blue-500 transition-colors">
+                      <input
+                        type="radio"
+                        value="paypal"
+                        checked={paymentMethod === 'paypal'}
+                        onChange={(e) => setPaymentMethod(e.target.value as any)}
+                        className="text-blue-600 mr-3"
+                      />
+                      <div>
+                        <p className="font-medium">PayPal</p>
+                        <p className="text-gray-600 text-sm">Pay with your PayPal account</p>
                       </div>
                     </label>
                   </div>
@@ -367,7 +447,12 @@ const Checkout: React.FC = () => {
                 {/* Payment Method Review */}
                 <div className="mb-6 p-4 bg-gray-50 rounded-lg">
                   <h3 className="font-medium mb-2">Payment Method</h3>
-                  <p>{paymentMethod === 'cash_on_delivery' ? 'Cash on Delivery' : 'Bank Transfer'}</p>
+                  <p>
+                    {paymentMethod === 'cash_on_delivery' && 'Cash on Delivery'}
+                    {paymentMethod === 'bank_transfer' && 'Bank Transfer'}
+                    {paymentMethod === 'credit_card' && 'Credit Card'}
+                    {paymentMethod === 'paypal' && 'PayPal'}
+                  </p>
                 </div>
 
                 {/* Order Items */}

@@ -1,17 +1,40 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Search, Filter, Grid, List, Star, ShoppingCart } from 'lucide-react';
-import { useLocalStorage } from '../hooks/useLocalStorage';
+import { supabase } from '../lib/supabase';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
-import { Product, Category, Brand } from '../types';
 import Button from '../components/UI/Button';
+
+interface Product {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  stock: number;
+  weight: number;
+  category_id: string;
+  brand_id: string;
+  images: string[];
+}
+
+interface Category {
+  id: string;
+  name: string;
+  image: string;
+}
+
+interface Brand {
+  id: string;
+  name: string;
+}
 
 const Products: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [products] = useLocalStorage<Product[]>('products', []);
-  const [categories] = useLocalStorage<Category[]>('categories', []);
-  const [brands] = useLocalStorage<Brand[]>('brands', []);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [loading, setLoading] = useState(true);
   
   const [filteredProducts, setFilteredProducts] = useState<Product[]>(products);
   const [searchQuery, setSearchQuery] = useState(searchParams.get('search') || '');
@@ -26,6 +49,28 @@ const Products: React.FC = () => {
   const { user } = useAuth();
 
   useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [productsRes, categoriesRes, brandsRes] = await Promise.all([
+          supabase.from('products').select('*'),
+          supabase.from('categories').select('*'),
+          supabase.from('brands').select('*')
+        ]);
+
+        if (productsRes.data) setProducts(productsRes.data);
+        if (categoriesRes.data) setCategories(categoriesRes.data);
+        if (brandsRes.data) setBrands(brandsRes.data);
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  useEffect(() => {
     let filtered = [...products];
 
     // Search filter
@@ -38,12 +83,12 @@ const Products: React.FC = () => {
 
     // Category filter
     if (selectedCategory) {
-      filtered = filtered.filter(product => product.categoryId === selectedCategory);
+      filtered = filtered.filter(product => product.category_id === selectedCategory);
     }
 
     // Brand filter
     if (selectedBrand) {
-      filtered = filtered.filter(product => product.brandId === selectedBrand);
+      filtered = filtered.filter(product => product.brand_id === selectedBrand);
     }
 
     // Price range filter
@@ -64,7 +109,7 @@ const Products: React.FC = () => {
         case 'name':
           return a.name.localeCompare(b.name);
         case 'newest':
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         default:
           return 0;
       }
@@ -257,7 +302,7 @@ const Products: React.FC = () => {
                         </h3>
                       </Link>
                       <p className="text-gray-600 text-sm mb-2">
-                        {getCategoryName(product.categoryId)} • {getBrandName(product.brandId)}
+                        {getCategoryName(product.category_id)} • {getBrandName(product.brand_id)}
                       </p>
                       <p className="text-gray-600 text-sm mb-4 line-clamp-2">{product.description}</p>
                       <div className="flex items-center justify-between">

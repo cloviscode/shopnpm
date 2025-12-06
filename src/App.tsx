@@ -23,6 +23,8 @@ import Categories from './pages/Categories';
 import Login from './pages/Auth/Login';
 import Register from './pages/Auth/Register';
 import AdminDashboard from './pages/Admin/Dashboard';
+import AdminProducts from './pages/Admin/Products';
+import AdminOrders from './pages/Admin/Orders';
 
 function App() {
   useEffect(() => {
@@ -41,8 +43,8 @@ function App() {
               </ProtectedRoute>
             }>
               <Route index element={<AdminDashboard />} />
-              <Route path="products" element={<div>Admin Products</div>} />
-              <Route path="orders" element={<div>Admin Orders</div>} />
+              <Route path="products" element={<AdminProducts />} />
+              <Route path="orders" element={<AdminOrders />} />
               <Route path="users" element={<div>Admin Users</div>} />
               <Route path="messages" element={<div>Admin Messages</div>} />
               <Route path="settings" element={<div>Admin Settings</div>} />
