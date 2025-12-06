@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search, Filter, Image as ImageIcon } from 'lucide-react';
+import { Plus, CreditCard as Edit, Trash2, Search, Filter, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import Button from '../../components/UI/Button';
 import Modal from '../../components/UI/Modal';
